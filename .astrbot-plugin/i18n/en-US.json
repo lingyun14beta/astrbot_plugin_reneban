@@ -1,6 +1,8 @@
 {
   "metadata": {
-    "display_name": "ReNeBan (Ban list plugin)"
+    "display_name": "ReNeBan (Ban list plugin)",
+    "short_desc": "Session and global ban list management.",
+    "desc": "A ban list plugin that blocks chosen users from using the bot within a session or globally. Administrators can ban or unban users with commands; run ban-help for a quick guide."
   },
   "config": {
     "enable": {

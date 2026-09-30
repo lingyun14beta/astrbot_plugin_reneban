@@ -1,6 +1,8 @@
 {
   "metadata": {
-    "display_name": "ReNeBan（BAN リストプラグイン）"
+    "display_name": "ReNeBan（BAN リストプラグイン）",
+    "short_desc": "セッション単位と全体の BAN リスト管理。",
+    "desc": "指定したユーザーがセッション内または全体でボットを利用できないようにする BAN リストプラグインです。管理者はコマンドでユーザーを BAN / 解除できます。簡単な使い方は ban-help で確認できます。"
   },
   "config": {
     "enable": {

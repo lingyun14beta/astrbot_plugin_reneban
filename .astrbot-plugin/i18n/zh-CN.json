@@ -1,6 +1,8 @@
 {
   "metadata": {
-    "display_name": "ReNeBan（Ban黑名单插件）"
+    "display_name": "ReNeBan（Ban黑名单插件）",
+    "short_desc": "会话级与全局的黑名单管理插件。",
+    "desc": "黑名单插件，用于禁用指定用户在会话或全局范围内使用机器人。管理员可通过指令对用户进行禁用或解除禁用，ban-help 查看简易帮助信息。"
   },
   "config": {
     "enable": {

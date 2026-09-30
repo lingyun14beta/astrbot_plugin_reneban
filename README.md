@@ -60,9 +60,18 @@ ReNeBan 的指令优先级策略为：`局部优先`，`pass > ban`。
 
 面板与插件配置界面支持 AstrBot 的全部四种语言：简体中文、English、日本語、Русский。
 
-- 界面文案与后端报错文案共用 `.astrbot-plugin/i18n/<locale>.json`，切换语言后二者同时生效
-- 插件配置项（是否启用禁用功能、缓存存活时间）的名称与说明也来自同一份词表，见 `config.<字段>.description` / `config.<字段>.hint`
-- 新增语言只需在 `.astrbot-plugin/i18n/` 下增加对应的 JSON 文件，无需改动代码
+词表位于 `.astrbot-plugin/i18n/<locale>.json`，按 AstrBot 的约定分四个命名空间：
+
+| 命名空间 | 用途 |
+|---|---|
+| `metadata` | 插件在插件页显示的名称（`display_name`）、卡片短描述（`short_desc`）与描述（`desc`） |
+| `config.<配置项>` | `_conf_schema.json` 中的配置文案（`description` / `hint` / `labels`） |
+| `pages.<页面目录>` | Dashboard Page 的标题与描述，以及页面内的自定义文案 |
+| `errors.<键>` / `fields.<键>` | 本插件用于后端报错与字段名的文案 |
+
+界面文案与后端报错共用同一份词表，切换语言后二者同时生效。新增语言只需在 `.astrbot-plugin/i18n/` 下增加对应 JSON 文件（嵌套结构，键名不含点号），代码无需改动。
+
+> 说明：配置弹窗顶部的 `astrbot_plugin_reneban 配置` 取自插件模块名，AstrBot 不对其做 i18n 解析，因此无法翻译；插件列表中显示的名称走 `metadata.display_name`，可以翻译。
 
 ## 管理面板（Dashboard Page）
 
