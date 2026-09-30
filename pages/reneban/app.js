@@ -35,7 +35,6 @@ const FALLBACK = {
   noReason: "无理由",
   permanent: "永久",
   expired: "已过期",
-  remaining: "剩余",
   search: "搜索用户 ID、会话或理由",
   filterScope: "范围",
   filterKind: "类型",
@@ -54,7 +53,6 @@ const FALLBACK = {
   sortExpiring: "即将到期优先",
   sortLatest: "最新添加优先",
   sortId: "按 ID 排序",
-  all: "全部",
   unitRecords: "条记录",
   colTarget: "对象",
   colScope: "范围",
@@ -124,6 +122,9 @@ const FALLBACK = {
   durationHint: "格式：1d2h30m（d 天 / h 小时 / m 分钟 / s 秒），留空或 0 表示永久",
   reasonHint: "留空表示无理由",
   deltaHint: "单位：秒，正数延长，负数缩短",
+  viewToggle: "视图切换",
+  tabsLabel: "记录分类",
+  statsLabel: "统计",
   durationPreset: "常用时长",
   preset1h: "1 小时",
   preset1d: "1 天",
@@ -140,7 +141,6 @@ const FALLBACK = {
   platformLabel: "平台",
   msgTypeLabel: "消息类型",
   selectSession: "选择会话",
-  noSessions: "暂无已记录的会话",
   shortcuts: "快捷键：R 刷新 · / 搜索 · Esc 关闭弹窗",
   create: "新增记录",
   statPermanentHint: "无到期时间",
@@ -164,9 +164,6 @@ const FALLBACK = {
   insightNextExpiry: "最近到期",
   insightTopUser: "记录最多的用户",
   insightTopSession: "限制最多的会话",
-  insightNoData: "暂无数据",
-  insightNone: "无",
-  insightRecords: "条记录",
   heatTitle: "未来 7 天到期热力",
   heatHint: "每格 3 小时，颜色越深到期越集中",
   heatToday: "今天",
@@ -222,6 +219,10 @@ const t = (key, fallback) => {
   const text = bridge?.t?.(`pages.reneban.${key}`, undefined);
   return text || fallback || FALLBACK[key] || key;
 };
+
+/** Locale reported to the backend, so failures come back in the same language. */
+const currentLocale = () =>
+  bridge?.getLocale?.() || bridge?.getContext?.()?.locale || "zh-CN";
 
 const escapeHtml = (value) =>
   String(value ?? "").replace(
@@ -472,7 +473,7 @@ const applyTheme = (isDark) => {
  * ------------------------------------------------------------------ */
 
 async function loadData() {
-  const payload = await bridge.apiGet("overview");
+  const payload = await bridge.apiGet("overview", { locale: currentLocale() });
   state.enabled = Boolean(payload?.enabled);
   state.records = Array.isArray(payload?.records) ? payload.records : [];
   state.sessionRecords = Array.isArray(payload?.session_records)
@@ -510,7 +511,9 @@ async function mutate(endpoint, body, successMessage) {
   if (state.busy) return false;
   state.busy = true;
   try {
-    await bridge.apiPost(endpoint, body);
+    // The locale travels with the request so validation errors come back in
+    // the language the operator is reading.
+    await bridge.apiPost(endpoint, { ...body, locale: currentLocale() });
     await loadData();
     render();
     toast("ok", successMessage || t("opSuccess"));
@@ -606,7 +609,17 @@ function renderStaticStrings() {
   $("footerHint").textContent = t("shortcuts");
   $("layoutTableLabel").textContent = t("layoutTable");
   $("layoutCardsLabel").textContent = t("layoutCards");
+  // The shell ships a readable default so the first paint is never empty; these
+  // keep the non-visible labels in step with the active language.
   document.title = t("heading");
+  $("refreshBtn").title = t("refresh");
+  $("searchInput").setAttribute("aria-label", t("search"));
+  $("stats").setAttribute("aria-label", t("statsLabel"));
+  $("heat").setAttribute("aria-label", t("heatTitle"));
+  $("tabs").setAttribute("aria-label", t("tabsLabel"));
+  $("modalClose").setAttribute("aria-label", t("close"));
+  const viewGroup = document.querySelector(".viewtoggle .segmented");
+  if (viewGroup) viewGroup.setAttribute("aria-label", t("viewToggle"));
 }
 
 function render() {
@@ -1348,8 +1361,8 @@ function renderSessions() {
         <span class="session-card__name" title="${escapeHtml(session.session_name)}">${escapeHtml(session.session_name)}</span>
         <span class="session-card__umo" title="${escapeHtml(session.umo)}">${escapeHtml(session.umo)}</span>
         <span class="session-card__counts">
-          <span class="badge badge--ban">${ICON.ban}${session.bans}</span>
-          <span class="badge badge--pass">${ICON.pass}${session.passes}</span>
+          <span class="badge badge--ban" title="${escapeHtml(t("sessionBans"))}">${ICON.ban}${session.bans}</span>
+          <span class="badge badge--pass" title="${escapeHtml(t("sessionPasses"))}">${ICON.pass}${session.passes}</span>
           <span class="badge badge--muted">${escapeHtml(prettyMessageType(session.message_type))}</span>
         </span>
       </button>`,

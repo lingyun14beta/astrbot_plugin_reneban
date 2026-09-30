@@ -12,6 +12,9 @@ The handlers never touch the data files directly. They go through
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+from pathlib import Path
 import time as time_module
 from typing import TYPE_CHECKING, Any
 
@@ -48,13 +51,195 @@ _MAX_NAME_LOOKUPS = 60
 # Reason values that the plugin treats as "no reason".
 _NO_REASON = {"无理由", "None", "NULL"}
 
+# Locale used when the caller does not state one and the header is unusable.
+DEFAULT_LOCALE = "zh-CN"
+
+# Locale shipped as the reference catalog. Every key must exist here.
+FALLBACK_LOCALE = "zh-CN"
+
+_I18N_DIR = Path(__file__).resolve().parent / ".astrbot-plugin" / "i18n"
+_LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[A-Za-z0-9]{2,8})?$")
+_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
+
+
+def _read_locale_file(locale: str) -> dict:
+    """Read one locale catalog from the plugin i18n directory.
+
+    Args:
+        locale: Locale name such as ``zh-CN``.
+
+    Returns:
+        The parsed catalog, or an empty dict when the file is missing or
+        malformed. A broken catalog must never break a request.
+    """
+    if not locale or "/" in locale or "\\" in locale or ".." in locale:
+        return {}
+    path = _I18N_DIR / f"{locale}.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:  # noqa: BLE001 - catalogs are optional
+        logger.debug(f"ReNeBan Page: 无法读取语言文件 {path.name}: {exc}")
+        return {}
+
+
+def _normalize_locale(raw: str | None) -> str:
+    """Pick a locale to answer in.
+
+    Args:
+        raw: Raw locale tag from the request, or ``None``.
+
+    Returns:
+        A supported locale name. Any unsupported or malformed tag falls back to
+        ``DEFAULT_LOCALE``.
+    """
+    if not isinstance(raw, str):
+        return DEFAULT_LOCALE
+    candidate = raw.strip()
+    if not _LOCALE_RE.match(candidate):
+        return DEFAULT_LOCALE
+    lowered = candidate.lower()
+    # Match the full tag first, then the bare language, so `en`, `en-GB` and
+    # `en-US` all resolve to the shipped catalog.
+    language = lowered.split("-", 1)[0]
+    for locale_file in sorted(_I18N_DIR.glob("*.json")):
+        name = locale_file.stem.lower()
+        if name == lowered or name.split("-", 1)[0] == language:
+            return locale_file.stem
+    return DEFAULT_LOCALE
+
+
+class PageMessages:
+    """Message catalog for backend responses.
+
+    The Page side already ships these strings, but a failed request is reported
+    through the bridge error channel rather than re-rendered on the Page, so the
+    backend has to localize its own errors.
+    """
+
+    def __init__(self) -> None:
+        self._catalogs: dict[str, dict] = {}
+        self._fallback = self._catalog(FALLBACK_LOCALE)
+
+    def _catalog(self, locale: str) -> dict:
+        if locale not in self._catalogs:
+            self._catalogs[locale] = _read_locale_file(locale)
+        return self._catalogs[locale]
+
+    @staticmethod
+    def _lookup(catalog: dict, key: str) -> str | None:
+        current: Any = catalog
+        for part in key.split("."):
+            if not isinstance(current, dict) or part not in current:
+                return None
+            current = current[part]
+        return current if isinstance(current, str) else None
+
+    def get(self, locale: str, key: str, **params: Any) -> str:
+        """Resolve one message.
+
+        A ``field`` placeholder that looks like a catalog key is resolved to the
+        localized field name, so callers can pass ``fields.umo`` instead of
+        hard-coding a label per locale.
+
+        Args:
+            locale: Locale to answer in.
+            key: Dotted key inside the catalog, e.g. ``errors.notFound``.
+            **params: Values substituted into ``{name}`` placeholders.
+
+        Returns:
+            The localized message, falling back to the reference locale and
+            finally to the key itself, so a missing translation is visible
+            rather than silent.
+        """
+        template = self._lookup(self._catalog(locale), key)
+        if template is None:
+            template = self._lookup(self._fallback, key)
+        if template is None:
+            return key
+        if not params:
+            return template
+
+        resolved = dict(params)
+        field_ref = resolved.get("field")
+        if isinstance(field_ref, str):
+            label = (
+                self._lookup(self._catalog(locale), field_ref)
+                or self._lookup(self._fallback, field_ref)
+                or resolved.get("fallback")
+            )
+            if isinstance(label, str):
+                resolved["field"] = label
+        return _PLACEHOLDER_RE.sub(
+            lambda match: str(resolved.get(match.group(1), match.group(0))), template
+        )
+
+
+MESSAGES = PageMessages()
+
+
+def resolve_locale(payload: dict | None = None) -> str:
+    """Determine the locale for the current request.
+
+    The Page passes its locale explicitly, because the bridge does not guarantee
+    an ``Accept-Language`` header. The header is still honoured as a fallback so
+    direct API calls behave sensibly.
+
+    Args:
+        payload: Parsed JSON body, when the handler already read one.
+
+    Returns:
+        A supported locale name.
+    """
+    try:
+        explicit = request.query.get("locale")
+    except Exception:  # noqa: BLE001 - no request context bound
+        explicit = None
+    if not explicit and isinstance(payload, dict):
+        value = payload.get("locale")
+        explicit = value if isinstance(value, str) else None
+    if explicit:
+        return _normalize_locale(explicit)
+
+    try:
+        header = request.headers.get("Accept-Language", "")
+    except Exception:  # noqa: BLE001 - no request context bound
+        header = ""
+    first = str(header).split(",", 1)[0].split(";", 1)[0].strip()
+    return _normalize_locale(first)
+
 
 class PageValidationError(ValueError):
-    """Raised when a Page supplied field fails validation."""
+    """Raised when a Page supplied field fails validation.
+
+    Carries a catalog key so the handler can answer in the caller's language
+    instead of raising a pre-formatted string.
+    """
+
+    def __init__(self, key: str, **params: Any) -> None:
+        """Store the message key and its placeholders.
+
+        Args:
+            key: Dotted key inside the message catalog.
+            **params: Values substituted into the message.
+        """
+        super().__init__(key)
+        self.key = key
+        self.params = params
 
 
 class PageNotFoundError(LookupError):
     """Raised when the addressed record does not exist (any more)."""
+
+    def __init__(self, key: str = "errors.notFound", **params: Any) -> None:
+        """Store the message key and its placeholders.
+
+        Args:
+            key: Dotted key inside the message catalog.
+            **params: Values substituted into the message.
+        """
+        super().__init__(key)
+        self.key = key
+        self.params = params
 
 
 def _umo_parts(umo: str) -> tuple[str, str, str]:
@@ -91,7 +276,7 @@ def parse_duration(raw: Any) -> int:
     if raw is None or raw == "":
         return 0
     if isinstance(raw, bool):
-        raise PageValidationError("duration 必须是数字或时间字符串")
+        raise PageValidationError("errors.durationType")
     if isinstance(raw, (int, float)):
         seconds = int(raw)
     else:
@@ -101,23 +286,25 @@ def parse_duration(raw: Any) -> int:
         try:
             seconds = timestr_to_int(text)
         except TimestrValueError as exc:
-            raise PageValidationError(
-                f"时间格式错误：{text}（示例：1d2h30m、30m、0）"
-            ) from exc
+            raise PageValidationError("errors.durationFormat", text=text) from exc
     if seconds < 0:
-        raise PageValidationError("时间不能为负数")
+        raise PageValidationError("errors.durationNegative")
     if seconds > MAX_DURATION_SECONDS:
-        raise PageValidationError("时间过长，最多 10 年")
+        raise PageValidationError("errors.durationTooLong")
     return seconds
 
 
-def parse_text(raw: Any, field: str, max_length: int = MAX_ID_LENGTH) -> str:
+def parse_text(
+    raw: Any, field: str, max_length: int = MAX_ID_LENGTH, *, field_key: str = ""
+) -> str:
     """Validate a required string field.
 
     Args:
         raw: Raw value from the request payload.
-        field: Human readable field name used in the error message.
+        field: Human readable field name used as a last-resort fallback.
         max_length: Longest accepted value.
+        field_key: Message-catalog key naming the field, so the error can be
+            localized. Falls back to ``field`` when omitted.
 
     Returns:
         The trimmed value.
@@ -125,13 +312,16 @@ def parse_text(raw: Any, field: str, max_length: int = MAX_ID_LENGTH) -> str:
     Raises:
         PageValidationError: If the value is missing, not a string or too long.
     """
+    label = field_key or field
     if not isinstance(raw, str):
-        raise PageValidationError(f"{field} 必须是字符串")
+        raise PageValidationError("errors.notString", field=label, fallback=field)
     value = raw.strip()
     if not value:
-        raise PageValidationError(f"{field} 不能为空")
+        raise PageValidationError("errors.empty", field=label, fallback=field)
     if len(value) > max_length:
-        raise PageValidationError(f"{field} 过长（最多 {max_length} 字符）")
+        raise PageValidationError(
+            "errors.tooLong", field=label, fallback=field, limit=max_length
+        )
     return value
 
 
@@ -150,12 +340,12 @@ def parse_reason(raw: Any) -> str | None:
     if raw is None:
         return None
     if not isinstance(raw, str):
-        raise PageValidationError("reason 必须是字符串")
+        raise PageValidationError("errors.reasonType")
     value = raw.strip()
     if not value or value in _NO_REASON:
         return None
     if len(value) > MAX_REASON_LENGTH:
-        raise PageValidationError(f"理由过长（最多 {MAX_REASON_LENGTH} 字符）")
+        raise PageValidationError("errors.reasonTooLong", max=MAX_REASON_LENGTH)
     return value
 
 
@@ -529,6 +719,40 @@ class PageApi:
         """
         return await asyncio.to_thread(self.plugin.data_manager.get_data, keys)
 
+    @staticmethod
+    def _localized_error(locale: str, exc: Exception, *, status_code: int = 400):
+        """Turn a catalog-backed exception into a localized error response.
+
+        Args:
+            locale: Locale to answer in.
+            exc: A ``PageValidationError`` or ``PageNotFoundError``.
+            status_code: HTTP status to report.
+
+        Returns:
+            A JSON error response carrying the resolved message.
+        """
+        key = getattr(exc, "key", None)
+        params = getattr(exc, "params", {}) or {}
+        message = MESSAGES.get(locale, key, **params) if key else str(exc)
+        return error_response(message, status_code=status_code)
+
+    @staticmethod
+    def _internal_error(locale: str, exc: Exception, key: str, log: str):
+        """Report an unexpected failure without leaking internals as the title.
+
+        Args:
+            locale: Locale to answer in.
+            exc: The unexpected exception.
+            key: Catalog key describing the failed operation.
+            log: Message for the plugin log.
+
+        Returns:
+            A JSON error response with the exception detail appended.
+        """
+        logger.error(f"{log}: {exc}")
+        detail = f"{MESSAGES.get(locale, key)}: {exc}"
+        return error_response(detail, status_code=500)
+
     def _shift(self, model: Any, delta: int, reason: str | None) -> None:
         """Apply a time delta to a record.
 
@@ -558,11 +782,13 @@ class PageApi:
             A JSON response with records, sessions, statistics and the current
             runtime switch state.
         """
+        locale = resolve_locale()
         try:
             payload = await self._build_overview()
         except Exception as exc:  # noqa: BLE001 - surface a readable error
-            logger.error(f"ReNeBan Page: 读取数据失败: {exc}")
-            return error_response(f"读取数据失败：{exc}", status_code=500)
+            return self._internal_error(
+                locale, exc, "errors.loadFailed", "ReNeBan Page: 读取数据失败"
+            )
         return json_response(payload)
 
     # ------------------------------------------------------------------
@@ -579,9 +805,12 @@ class PageApi:
             A JSON response with the resulting state.
         """
         payload = await request.json(default={}) or {}
+        locale = resolve_locale(payload)
         enabled = payload.get("enabled")
         if not isinstance(enabled, bool):
-            return error_response("enabled 必须是布尔值", status_code=400)
+            return error_response(
+                MESSAGES.get(locale, "errors.enabledType"), status_code=400
+            )
         self.plugin.enable = enabled
         logger.info(f"ReNeBan Page: 通过 Dashboard 将禁用功能设为 {enabled}")
         return json_response({"enabled": enabled})
@@ -616,7 +845,8 @@ class PageApi:
         """
         try:
             payload = await request.json(default={}) or {}
-            identifier = parse_text(payload.get("id"), "ID")
+            locale = resolve_locale(payload)
+            identifier = parse_text(payload.get("id"), "ID", field_key="fields.id")
             scope, kind, target, umo = _parse_scope(payload)
             keys = _data_keys(kind, scope, target)
 
@@ -624,25 +854,26 @@ class PageApi:
             if target == "session":
                 model_list = tables[keys[0]]
                 if not model_list.remove_by_id(umo):
-                    raise PageNotFoundError("未找到该会话记录，可能已过期")
+                    raise PageNotFoundError("errors.sessionRecordMissing")
             elif scope == "global":
                 model_list = tables[keys[0]]
                 if not model_list.remove_by_id(identifier):
-                    raise PageNotFoundError("未找到该记录，可能已过期")
+                    raise PageNotFoundError("errors.recordMissing")
             else:
                 table = tables[keys[0]]
                 model_list = table.get(umo)
                 if model_list is None or not model_list.remove_by_id(identifier):
-                    raise PageNotFoundError("未找到该记录，可能已过期")
+                    raise PageNotFoundError("errors.recordMissing")
 
             self.plugin.data_manager.write_data(keys[0], tables[keys[0]])
         except PageValidationError as exc:
-            return error_response(str(exc), status_code=400)
+            return self._localized_error(locale, exc, status_code=400)
         except PageNotFoundError as exc:
-            return error_response(str(exc), status_code=404)
+            return self._localized_error(locale, exc, status_code=404)
         except Exception as exc:  # noqa: BLE001 - surface a readable error
-            logger.error(f"ReNeBan Page: 删除记录失败: {exc}")
-            return error_response(f"删除失败：{exc}", status_code=500)
+            return self._internal_error(
+                locale, exc, "errors.deleteFailed", "ReNeBan Page: 删除记录失败"
+            )
 
         return json_response(
             {"deleted": {"id": identifier, "umo": umo, "scope": scope, "kind": kind}}
@@ -659,15 +890,16 @@ class PageApi:
         """
         try:
             payload = await request.json(default={}) or {}
-            identifier = parse_text(payload.get("id"), "ID")
+            locale = resolve_locale(payload)
+            identifier = parse_text(payload.get("id"), "ID", field_key="fields.id")
             raw_delta = payload.get("delta", 0)
             if isinstance(raw_delta, bool) or not isinstance(raw_delta, (int, float)):
-                raise PageValidationError("delta 必须是数字（秒）")
+                raise PageValidationError("errors.deltaType")
             delta = int(raw_delta)
             if delta == 0:
-                raise PageValidationError("delta 不能为 0，如需删除请使用删除操作")
+                raise PageValidationError("errors.deltaZero")
             if abs(delta) > MAX_DURATION_SECONDS:
-                raise PageValidationError("调整幅度过大，最多 10 年")
+                raise PageValidationError("errors.deltaTooLarge")
 
             scope, kind, target, umo = _parse_scope(payload)
             reason = parse_reason(payload.get("reason"))
@@ -686,20 +918,23 @@ class PageApi:
                     else None
                 )
             if model is None:
-                raise PageNotFoundError("未找到该记录，可能已过期")
+                raise PageNotFoundError("errors.recordMissing")
 
             self._shift(model, delta, reason)
             self.plugin.data_manager.write_data(keys[0], tables[keys[0]])
             remaining = model.time
         except PageValidationError as exc:
-            return error_response(str(exc), status_code=400)
+            return self._localized_error(locale, exc, status_code=400)
         except PageNotFoundError as exc:
-            return error_response(str(exc), status_code=404)
+            return self._localized_error(locale, exc, status_code=404)
         except PermanentRecordTimeError as exc:
-            return error_response(_time_change_message(exc), status_code=400)
+            return error_response(
+                MESSAGES.get(locale, _time_change_key(exc)), status_code=400
+            )
         except Exception as exc:  # noqa: BLE001 - surface a readable error
-            logger.error(f"ReNeBan Page: 调整时长失败: {exc}")
-            return error_response(f"调整失败：{exc}", status_code=500)
+            return self._internal_error(
+                locale, exc, "errors.shiftFailed", "ReNeBan Page: 调整时长失败"
+            )
 
         return json_response(
             {
@@ -726,7 +961,8 @@ class PageApi:
         """
         try:
             payload = await request.json(default={}) or {}
-            identifier = parse_text(payload.get("id"), "用户 ID")
+            locale = resolve_locale(payload)
+            identifier = parse_text(payload.get("id"), "ID", field_key="fields.userId")
             tables = await self._load_tables(["ban", "pass", "banall", "passall"])
             removed = 0
             for key in ("ban", "pass"):
@@ -741,10 +977,11 @@ class PageApi:
                 list(tables.keys()), list(tables.values())
             )
         except PageValidationError as exc:
-            return error_response(str(exc), status_code=400)
+            return self._localized_error(locale, exc, status_code=400)
         except Exception as exc:  # noqa: BLE001 - surface a readable error
-            logger.error(f"ReNeBan Page: 清除用户记录失败: {exc}")
-            return error_response(f"清除失败：{exc}", status_code=500)
+            return self._internal_error(
+                locale, exc, "errors.resetFailed", "ReNeBan Page: 清除用户记录失败"
+            )
         return json_response({"removed": removed, "id": identifier})
 
     async def reset_session(self):
@@ -758,9 +995,10 @@ class PageApi:
         """
         try:
             payload = await request.json(default={}) or {}
-            umo = parse_text(payload.get("umo"), "UMO")
+            locale = resolve_locale(payload)
+            umo = parse_text(payload.get("umo"), "UMO", field_key="fields.umo")
             if _UMO_SEPARATOR not in umo:
-                raise PageValidationError(f"UMO 不合法：{umo}")
+                raise PageValidationError("errors.umoInvalid", umo=umo)
             tables = await self._load_tables(["ban", "pass", "umoban", "umopass"])
             removed = 0
             for key in ("ban", "pass", "umoban", "umopass"):
@@ -776,10 +1014,14 @@ class PageApi:
                 list(tables.keys()), list(tables.values())
             )
         except PageValidationError as exc:
-            return error_response(str(exc), status_code=400)
+            return self._localized_error(locale, exc, status_code=400)
         except Exception as exc:  # noqa: BLE001 - surface a readable error
-            logger.error(f"ReNeBan Page: 清除会话记录失败: {exc}")
-            return error_response(f"清除失败：{exc}", status_code=500)
+            return self._internal_error(
+                locale,
+                exc,
+                "errors.resetFailed",
+                "ReNeBan Page: 清除会话记录失败",
+            )
         return json_response({"removed": removed, "umo": umo})
 
     @staticmethod
@@ -809,9 +1051,7 @@ class PageApi:
         if target == "session":
             banned = any(item.umo == identifier for item in tables["umoban"])
             if not banned:
-                raise PageValidationError(
-                    "该会话当前没有被禁用，无需解限。请先禁用该会话，或改用会话内的用户操作。"
-                )
+                raise PageValidationError("errors.passNeedsSessionBan")
             return
 
         banned = tables["banall"].find_by_id(identifier) is not None
@@ -819,9 +1059,7 @@ class PageApi:
             bucket = tables["ban"].get(umo)
             banned = bucket is not None and bucket.find_by_id(identifier) is not None
         if not banned:
-            raise PageValidationError(
-                "该用户当前没有被禁用，无需解限。请先创建禁用记录，或确认作用范围是否正确。"
-            )
+            raise PageValidationError("errors.passNeedsBan")
 
     async def _apply_action(self, event: str):
         """Shared implementation of the ban and pass endpoints.
@@ -836,7 +1074,8 @@ class PageApi:
         kind = event
         try:
             payload = await request.json(default={}) or {}
-            identifier = parse_text(payload.get("id"), "ID")
+            locale = resolve_locale(payload)
+            identifier = parse_text(payload.get("id"), "ID", field_key="fields.id")
             duration = parse_duration(payload.get("duration", 0))
             reason = parse_reason(payload.get("reason"))
             scope, kind, target, umo = _parse_scope(payload, kind=event)
@@ -888,12 +1127,18 @@ class PageApi:
             expire_at = model.time if model is not None else expire_at
             self.plugin.data_manager.write_data(keys[0], data)
         except PageValidationError as exc:
-            return error_response(str(exc), status_code=400)
+            return self._localized_error(locale, exc, status_code=400)
         except PermanentRecordTimeError as exc:
-            return error_response(_time_change_message(exc), status_code=400)
+            return error_response(
+                MESSAGES.get(locale, _time_change_key(exc)), status_code=400
+            )
         except Exception as exc:  # noqa: BLE001 - surface a readable error
-            logger.error(f"ReNeBan Page: 写入 {event} 记录失败: {exc}")
-            return error_response(f"操作失败：{exc}", status_code=500)
+            return self._internal_error(
+                locale,
+                exc,
+                "errors.writeFailed",
+                f"ReNeBan Page: 写入 {event} 记录失败",
+            )
 
         return json_response(
             {
@@ -929,27 +1174,27 @@ def _parse_scope(
     """
     resolved_kind = kind or payload.get("kind")
     if resolved_kind not in ("ban", "pass"):
-        raise PageValidationError("kind 必须是 ban 或 pass")
+        raise PageValidationError("errors.kindInvalid")
 
     scope = payload.get("scope")
     if scope not in ("session", "global"):
-        raise PageValidationError("scope 必须是 session 或 global")
+        raise PageValidationError("errors.scopeInvalid")
 
     target = payload.get("target") or "user"
     if target not in ("user", "session"):
-        raise PageValidationError("target 必须是 user 或 session")
+        raise PageValidationError("errors.targetInvalid")
     if scope == "global" and target == "session":
         # The data model has no global session record.
-        raise PageValidationError("会话级记录不支持全局范围")
+        raise PageValidationError("errors.globalSessionUnsupported")
 
     umo: str | None = None
     if scope == "session":
         # Session level records carry their session in ``id``, user records in
         # ``umo``. Accept both so either endpoint shape works.
         raw = payload.get("umo") or (payload.get("id") if target == "session" else None)
-        umo = parse_text(raw, "UMO")
+        umo = parse_text(raw, "UMO", field_key="fields.umo")
         if _UMO_SEPARATOR not in umo:
-            raise PageValidationError(f"UMO 不合法：{umo}")
+            raise PageValidationError("errors.umoInvalid", umo=umo)
     return scope, resolved_kind, target, umo
 
 
@@ -971,27 +1216,44 @@ def _data_keys(kind: str, scope: str, target: str) -> list[str]:
     return ["ban" if kind == "ban" else "pass"]
 
 
-def _time_change_message(exc: Exception) -> str:
-    """Translate a data model time error into a user facing message.
+def _time_change_key(exc: Exception) -> str:
+    """Map a data model time error to a message catalog key.
 
     Args:
         exc: Exception raised by ``add_time`` or ``subtract_time``.
 
     Returns:
-        A readable Chinese message.
+        A dotted key inside the message catalog.
     """
     text = str(exc)
     if "permanent record" in text:
-        return "该记录为永久时限，不支持此操作（如需删除请直接删除记录）"
+        return "errors.permanentRecord"
     if "non-negative" in text:
-        return "时间不能为负数"
-    return f"调整失败：{text}"
+        return "errors.durationNegative"
+    return "errors.shiftFailed"
+
+
+def _require_target_ban_key(target: str) -> str:
+    """Pick the catalog key explaining why an exemption was refused.
+
+    Args:
+        target: ``user`` or ``session``.
+
+    Returns:
+        A dotted key inside the message catalog.
+    """
+    return (
+        "errors.passNeedsSessionBan" if target == "session" else "errors.passNeedsBan"
+    )
 
 
 __all__ = [
+    "DEFAULT_LOCALE",
+    "MESSAGES",
     "PAGE_NAME",
     "PLUGIN_NAME",
     "PageApi",
     "PageNotFoundError",
     "PageValidationError",
+    "resolve_locale",
 ]
