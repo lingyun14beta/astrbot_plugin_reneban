@@ -2,6 +2,16 @@
   "metadata": {
     "display_name": "ReNeBan (Ban list plugin)"
   },
+  "config": {
+    "enable": {
+      "description": "Enable the ban filter",
+      "hint": "When off, the blacklist stops applying immediately but the records are kept; same as /ban-disable"
+    },
+    "cache_ttl": {
+      "description": "Cache lifetime (seconds)",
+      "hint": "How long the record files stay cached: lower uses less memory, higher reads the disk less. Restart the plugin to apply."
+    }
+  },
   "fields": {
     "id": "ID",
     "userId": "User ID",

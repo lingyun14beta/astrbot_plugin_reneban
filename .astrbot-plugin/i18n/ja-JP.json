@@ -2,6 +2,16 @@
   "metadata": {
     "display_name": "ReNeBan（BAN リストプラグイン）"
   },
+  "config": {
+    "enable": {
+      "description": "BAN 機能を有効にする",
+      "hint": "オフにすると BAN リストは即時停止しますが、記録は残ります。/ban-disable と同じ動作です"
+    },
+    "cache_ttl": {
+      "description": "キャッシュの保持時間（秒）",
+      "hint": "記録ファイルをキャッシュする時間です。小さいほどメモリを節約し、大きいほどディスクの読み込みを抑えます。変更後はプラグインの再読み込みが必要です"
+    }
+  },
   "fields": {
     "id": "ID",
     "userId": "ユーザー ID",

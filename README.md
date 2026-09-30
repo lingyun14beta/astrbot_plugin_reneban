@@ -56,6 +56,14 @@ ReNeBan 的指令优先级策略为：`局部优先`，`pass > ban`。
 - `"None"`
 - `"NULL"`
 
+## 语言
+
+面板与插件配置界面支持 AstrBot 的全部四种语言：简体中文、English、日本語、Русский。
+
+- 界面文案与后端报错文案共用 `.astrbot-plugin/i18n/<locale>.json`，切换语言后二者同时生效
+- 插件配置项（是否启用禁用功能、缓存存活时间）的名称与说明也来自同一份词表，见 `config.<字段>.description` / `config.<字段>.hint`
+- 新增语言只需在 `.astrbot-plugin/i18n/` 下增加对应的 JSON 文件，无需改动代码
+
 ## 管理面板（Dashboard Page）
 
 ReNeBan 自带一个 WebUI 管理页面，可在 **插件管理 → ReNeBan → Pages** 中打开「黑名单管理面板」。
