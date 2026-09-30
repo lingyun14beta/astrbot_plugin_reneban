@@ -528,6 +528,80 @@ svg {
   background: var(--inset);
 }
 
+/* Live filter switch. Off is a clear, empty track so the control reads as a
+   switch rather than as a status pill sitting next to the other buttons. */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 13px 0 10px;
+  font-size: 12.5px;
+  font-weight: 570;
+  color: var(--ink-2);
+  background: var(--card);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  transition:
+    border-color 0.18s var(--ease),
+    color 0.18s var(--ease),
+    background-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
+}
+
+.switch:hover {
+  border-color: var(--line-3);
+  box-shadow: var(--shadow-2);
+}
+
+.switch__track {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: var(--r-full);
+  background: var(--inset-2);
+  border: 1px solid var(--line-3);
+  transition: background-color 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+
+.switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink-4);
+  box-shadow: 0 1px 2px rgba(13, 18, 32, 0.25);
+  transition: transform 0.22s var(--ease-out), background-color 0.2s var(--ease);
+}
+
+.switch__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.switch[aria-checked="true"] {
+  color: var(--brand);
+  border-color: var(--brand-line);
+  background: var(--brand-soft);
+}
+
+.switch[aria-checked="true"] .switch__track {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.switch[aria-checked="true"] .switch__thumb {
+  background: #fff;
+  transform: translateX(14px);
+}
+
 /* Segmented control: scope/target pickers and the view switch. */
 .segmented {
   display: inline-flex;
@@ -2536,9 +2610,29 @@ tr:focus-within .row-actions,
   border-radius: var(--r-md);
 }
 
+/* Same shape as the danger note, for state changes that are not destructive. */
+.info-note {
+  display: flex;
+  gap: 9px;
+  padding: 11px 13px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-line);
+  border-radius: var(--r-md);
+}
+
+.info-note svg,
 .danger-note svg {
   margin-top: 1px;
   font-size: 15px;
+}
+
+.confirm-note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-4);
 }
 
 /* ==========================================================================

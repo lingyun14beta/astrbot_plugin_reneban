@@ -83,6 +83,11 @@ const FALLBACK = {
   enableHint: "与 /ban-enable、/ban-disable 相同，重启后恢复配置值",
   enableAction: "启用功能",
   disableAction: "停用功能",
+  confirmEnableTitle: "启用禁用功能？",
+  confirmEnableBody: "启用后，黑名单立即生效：名单内的用户将无法再让机器人响应。",
+  confirmDisableTitle: "停用禁用功能？",
+  confirmDisableBody: "停用后，黑名单立即失效：名单内的用户将恢复使用，但记录会保留。",
+  enableConfirmNote: "与 /ban-enable、/ban-disable 效果相同，重启后恢复配置文件中的值。",
   statTotal: "记录总数",
   statBans: "禁用记录",
   statPasses: "解限记录",
@@ -1724,13 +1729,33 @@ function openShiftDialog({ record, direction }) {
   };
 }
 
-/** Build the confirm dialog for the destructive operations. */
-function openConfirmDialog({ title, message, confirmLabel, danger = true, onConfirm }) {
+/**
+ * Build a confirm dialog.
+ *
+ * `tone` picks how alarming the note and the confirm button look:
+ * `critical` for irreversible deletions, `brand` for state changes that are
+ * meaningful but reversible.
+ */
+function openConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  danger = true,
+  tone,
+  note,
+  onConfirm,
+}) {
+  const resolvedTone = tone || (danger ? "critical" : "brand");
   const body = `
-    <div class="danger-note">${ICON.warn}<span>${escapeHtml(message)}</span></div>`;
+    <div class="${resolvedTone === "critical" ? "danger-note" : "info-note"}">${
+      resolvedTone === "critical" ? ICON.warn : ICON.info
+    }<span>${escapeHtml(message)}</span></div>
+    ${note ? `<p class="confirm-note">${escapeHtml(note)}</p>` : ""}`;
+  const toneClass =
+    resolvedTone === "critical" ? "btn--danger" : resolvedTone === "pass" ? "btn--pass" : "btn--primary";
   const foot = `
     <button class="btn btn--ghost" data-modal="cancel" type="button">${escapeHtml(t("cancel"))}</button>
-    <button class="btn ${danger ? "btn--danger" : "btn--primary"}" data-modal="submit" type="button">${escapeHtml(confirmLabel || t("confirm"))}</button>`;
+    <button class="btn ${toneClass}" data-modal="submit" type="button">${escapeHtml(confirmLabel || t("confirm"))}</button>`;
 
   openModal({ title, body, foot });
   state.modal = {
@@ -1955,14 +1980,21 @@ function wireEvents() {
     }),
   );
 
-  $("enableSwitch").addEventListener("click", async () => {
+  // The switch flips the live filter, which starts or stops blocking people
+  // right away, so it asks for confirmation instead of applying on one click.
+  $("enableSwitch").addEventListener("click", () => {
     const next = !state.enabled;
-    const ok = await mutate(
-      "toggle",
-      { enabled: next },
-      next ? t("enableOn") : t("enableOff"),
-    );
-    if (!ok) renderEnableSwitch();
+    openConfirmDialog({
+      title: next ? t("confirmEnableTitle") : t("confirmDisableTitle"),
+      message: next ? t("confirmEnableBody") : t("confirmDisableBody"),
+      note: t("enableConfirmNote"),
+      confirmLabel: next ? t("enableAction") : t("disableAction"),
+      tone: next ? "critical" : "brand",
+      // Shown for both directions: the switch is runtime-only either way.
+      note: t("enableConfirmNote"),
+      onConfirm: () =>
+        mutate("toggle", { enabled: next }, next ? t("enableOn") : t("enableOff")),
+    });
   });
 
   $("fatalRetry").addEventListener("click", () => {
@@ -1971,9 +2003,15 @@ function wireEvents() {
     refresh();
   });
 
-  // Modal: delegation covers buttons created after mount.
+  // Modal: delegation covers buttons created after mount. The header close
+  // button is part of the static shell, so it is matched explicitly rather than
+  // relying on an attribute a future edit could drop.
   $("modal").addEventListener("click", async (event) => {
     if (event.target.closest("[data-close]")) {
+      closeModal();
+      return;
+    }
+    if (event.target.closest("#modalClose")) {
       closeModal();
       return;
     }
