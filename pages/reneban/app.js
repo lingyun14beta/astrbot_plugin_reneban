@@ -458,6 +458,8 @@ const state = {
   layout: "table",
   sort: { key: "remaining", dir: "asc" },
   modal: null,
+  /** Page scroll offset held while a dialog is open, 0 when none is. */
+  pageScrollY: 0,
   busy: false,
 };
 
@@ -1466,6 +1468,13 @@ function closeModal() {
   modal.hidden = true;
   $("modalBody").innerHTML = "";
   $("modalFoot").innerHTML = "";
+  // Release the background. Hiding the overlay can reset the scroll offset, so
+  // the remembered position is restored rather than assumed to survive.
+  document.documentElement.classList.remove("is-dialog-open");
+  if (state.pageScrollY) {
+    window.scrollTo(0, state.pageScrollY);
+    state.pageScrollY = 0;
+  }
 }
 
 function openModal({ title, body, foot, onMount }) {
@@ -1473,6 +1482,10 @@ function openModal({ title, body, foot, onMount }) {
   $("modalTitle").textContent = title;
   $("modalBody").innerHTML = body;
   $("modalFoot").innerHTML = foot;
+  // The dialog is fixed to the viewport, so a swipe outside its own scroll area
+  // would otherwise scroll the page behind it out of sight.
+  state.pageScrollY = window.scrollY || 0;
+  document.documentElement.classList.add("is-dialog-open");
   $("modal").hidden = false;
   onMount?.();
   const focusTarget = $("modalBody").querySelector("input, select, textarea, button");

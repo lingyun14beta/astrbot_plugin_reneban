@@ -2495,17 +2495,38 @@ tr:focus-within .row-actions,
    15. Dialog
    ========================================================================== */
 
+/* The page behind a dialog must not scroll. On a touch device the swipe used to
+   reach the document instead of the dialog, so the record list slid away behind
+   the dialog and the record itself stayed put. */
+html.is-dialog-open,
+html.is-dialog-open body {
+  overflow: hidden;
+}
+
 .modal {
   position: fixed;
   inset: 0;
   z-index: 80;
-  display: grid;
-  place-items: center;
+  /* A flex row with auto margins on the panel, rather than `place-items: center`:
+     the dialog is still centred while it fits, and once it is taller than the
+     viewport this overlay scrolls it the rest of the way into view. Centring
+     alone put the head and the action bar outside the panel's clip box, where
+     nothing could reach them. */
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
   padding: 24px;
+  overflow-y: auto;
+  /* The dialog owns the gesture: a swipe that reaches its end must not chain
+     through to the record list behind it. */
+  overscroll-behavior: contain;
 }
 
+/* Fixed rather than absolute: an absolutely positioned child adds its own box to
+   the overlay's scrollable area, which gave every dialog a few pixels of phantom
+   scroll for a swipe to catch on. It covers the same box either way. */
 .modal__backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(6, 8, 16, 0.5);
   backdrop-filter: blur(5px) saturate(1.25);
@@ -2515,7 +2536,17 @@ tr:focus-within .row-actions,
 .modal__panel {
   position: relative;
   width: min(560px, 100%);
-  max-height: min(86vh, 800px);
+  /* The smaller of two bounds. `100%` keeps the dialog inside the overlay it is
+     drawn in; `86vh` keeps a margin against the mobile visual viewport, which is
+     shorter than the iframe while the browser toolbar is on screen. The Page
+     cannot measure that from inside the sandbox, so the margin is expressed
+     relative to the height it can see. The floor is the height at which the
+     title bar, a usable body and the action bar still fit; below it the dialog
+     is allowed to overflow the overlay, which then scrolls it. */
+  max-height: max(min(86vh, 100%), 220px);
+  /* `auto` centres the panel while it fits and collapses to zero when it does
+     not, which keeps its top edge reachable. */
+  margin: auto;
   display: flex;
   flex-direction: column;
   background: var(--card);
@@ -2533,6 +2564,9 @@ tr:focus-within .row-actions,
   gap: 12px;
   padding: 15px 17px;
   border-bottom: 1px solid var(--line);
+  /* The title bar and the action bar are never the part that gives way; only the
+     body shrinks, and it scrolls. */
+  flex: none;
 }
 
 .modal__title {
@@ -2548,6 +2582,15 @@ tr:focus-within .row-actions,
   gap: 14px;
   padding: 16px 17px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Content never shrinks to fit the dialog. A shrinkable child that clips its own
+   overflow (the record list, which needs `overflow: hidden` for its rounded
+   corners) collapsed to the body's height instead of overflowing it, so the body
+   had nothing to scroll and the rows were cut off with no way to reach them. */
+.modal__body > * {
+  flex: none;
 }
 
 .modal__foot {
@@ -2558,10 +2601,19 @@ tr:focus-within .row-actions,
   padding: 13px 17px;
   background: var(--inset);
   border-top: 1px solid var(--line);
+  flex: none;
 }
 
 .modal__foot .grow {
   margin-right: auto;
+}
+
+/* A landscape phone leaves little height, and the frame would spend a third of
+   it before the dialog has drawn anything. */
+@media (max-height: 560px) {
+  .modal {
+    padding: 12px;
+  }
 }
 
 .form-grid {
